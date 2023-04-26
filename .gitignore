@@ -1,0 +1,8 @@
+cmake-build-debug/
+build/
+.idea/
+sdkconfig
+sdkconfig.old
+managed_components
+*.bin
+nvs.csv
