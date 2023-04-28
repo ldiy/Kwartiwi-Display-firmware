@@ -1,0 +1,26 @@
+#ifndef BUZZER_H
+#define BUZZER_H
+
+#define BUZZER_PIN_NUM 18
+#define BUZZER_LEDC_CHANNEL LEDC_CHANNEL_0
+#define BUZZER_LEDC_SPEED_MODE LEDC_LOW_SPEED_MODE
+#define BUZZER_LEDC_TIMER LEDC_TIMER_0
+#define BUZZER_RESOLUTION LEDC_TIMER_13_BIT
+#define BUZZER_DUTY 4095 // (2^(BUZZER_RESOLUTION) - 1)/2
+#define BUZZER_DEFAULT_FREQ_HZ 4000
+#define BUZZER_BEEP_DOUBLE_LOW_FREQ_HZ 3000
+#define BUZZER_BEEP_DOUBLE_HIGH_FREQ_HZ 4000
+#define BUZZER_BEEP_SHORT_TIME_MS 50
+#define BUZZER_BEEP_LONG_TIME_MS 200
+
+enum buzzer_beep_type_e {
+    BUZZER_BEEP_TYPE_SHORT,
+    BUZZER_BEEP_TYPE_LONG,
+    BUZZER_BEEP_TYPE_DOUBLE,
+};
+
+// Function prototypes
+void buzzer_task(void *pvParameters);
+void buzzer_beep(enum buzzer_beep_type_e beep_type);
+
+#endif //BUZZER_H

@@ -6,6 +6,7 @@
 #include "esp_system.h"
 #include "esp_event.h"
 #include "networking.h"
+#include "buzzer.h"
 
 void app_main(void) {
 
@@ -25,4 +26,8 @@ void app_main(void) {
     // Initialize networking
     esp_log_level_set("networking", ESP_LOG_DEBUG);
     setup_networking();
+
+    // Initialize the buzzer
+    esp_log_level_set("buzzer", ESP_LOG_DEBUG);
+    xTaskCreate(&buzzer_task, "buzzer_task", 4096, NULL, 5, NULL);
 }
