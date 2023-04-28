@@ -7,6 +7,7 @@
 #include "esp_event.h"
 #include "networking.h"
 #include "buzzer.h"
+#include "ui_task.h"
 
 void app_main(void) {
 
@@ -30,4 +31,8 @@ void app_main(void) {
     // Initialize the buzzer
     esp_log_level_set("buzzer", ESP_LOG_DEBUG);
     xTaskCreate(&buzzer_task, "buzzer_task", 4096, NULL, 5, NULL);
+
+    // Initialize the display
+    esp_log_level_set("ui_task", ESP_LOG_DEBUG);
+    xTaskCreatePinnedToCore(&ui_task, "ui_task", 8192, NULL, 5, NULL, 1);
 }
