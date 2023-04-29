@@ -8,6 +8,7 @@
 #include "networking.h"
 #include "buzzer.h"
 #include "ui_task.h"
+#include "tsc2046.h"
 
 void app_main(void) {
 
@@ -25,8 +26,8 @@ void app_main(void) {
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
     // Initialize networking
-    esp_log_level_set("networking", ESP_LOG_DEBUG);
-    setup_networking();
+//    esp_log_level_set("networking", ESP_LOG_DEBUG);
+//    setup_networking();
 
     // Initialize the buzzer
     esp_log_level_set("buzzer", ESP_LOG_DEBUG);
@@ -35,4 +36,13 @@ void app_main(void) {
     // Initialize the display
     esp_log_level_set("ui_task", ESP_LOG_DEBUG);
     xTaskCreatePinnedToCore(&ui_task, "ui_task", 8192, NULL, 5, NULL, 1);
+
+    // Initialize the touchscreen
+    esp_log_level_set("tsc2046", ESP_LOG_DEBUG);
+    tsc2046_init();
+    // Read the touchscreen every 100ms
+    for(;;) {
+        tsc2046_read(false);
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
 }

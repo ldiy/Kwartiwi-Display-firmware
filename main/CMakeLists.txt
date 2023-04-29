@@ -1,2 +1,2 @@
-idf_component_register(SRCS "main.c" "networking.c" "buzzer.c" "ui.c" "ui_task.c"
+idf_component_register(SRCS "main.c" "networking.c" "buzzer.c" "ui.c" "ui_task.c" "tsc2046.c"
                     INCLUDE_DIRS "." "include")
