@@ -1,7 +1,8 @@
-#include <sys/cdefs.h>
-
 #ifndef UI_TASK_H
 #define UI_TASK_H
+
+#include <sys/cdefs.h>
+#include "lvgl.h"
 
 #define UI_TASK_PIN_NUM_LCD_DC          7
 #define UI_TASK_PIN_NUM_LCD_WR          15
@@ -27,6 +28,10 @@
 
 #define UI_TASK_LVGL_TICK_PERIOD_MS 1
 
+// Function prototypes
 _Noreturn void ui_task(void *pvParameters);
+void ui_task_calibrate_tp(lv_point_t src_points[], lv_point_t cal_points[], size_t len);
+void ui_task_store_tp_cal(void);
+void ui_task_use_raw_tp_data(bool raw);
 
 #endif //UI_TASK_H

@@ -18,21 +18,24 @@
 #include "lvgl.h"
 #include "ui.h"
 #include "buzzer.h"
+#include "tsc2046.h"
 #include "ui_task.h"
 
-#define PIXEL_CLOCK_HZ  (10 * 1000 * 1000)
+#define PIXEL_CLOCK_HZ  (10 * 1000 * 1000)  // 10 MHz
 #define LVGL_BUFFER_SIZE (UI_TASK_DISPLAY_WIDTH * UI_TASK_DISPLAY_HEIGHT * sizeof(lv_color_t) / 5) // 1/5 of the display area (at least 1/10 is recommended)
 #define MAX_TRANSFER_SIZE LVGL_BUFFER_SIZE
 
 
-static const char *TAG = "display";
+static const char *TAG = "ui_task";
 static esp_lcd_i80_bus_handle_t i80_bus;
 static esp_lcd_panel_io_handle_t io_handle;
 static esp_lcd_panel_handle_t panel_handle;
 static lv_disp_drv_t disp_drv;
 static lv_disp_draw_buf_t disp_buf;
 static lv_indev_drv_t buttons_indev_drv;
+static lv_indev_drv_t touch_indev_drv;
 static esp_timer_handle_t lvgl_periodic_timer;
+static bool use_raw_touch_input = false;
 
 // Function prototypes
 static void init_display(void);
@@ -45,8 +48,9 @@ static void lvgl_flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t 
 static bool color_trans_done_cb(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_io_event_data_t *edata, void *user_ctx);
 static void lvgl_buttons_read_cb(lv_indev_drv_t *drv, lv_indev_data_t *data);
 static void lvgl_buttons_feedback_cb(lv_indev_drv_t *drv, uint8_t event);
+static void lvgl_touch_read_cb(lv_indev_drv_t *drv, lv_indev_data_t *data);
+static void lvgl_touch_feedback_cb(lv_indev_drv_t *drv, uint8_t event);
 static void lvgl_tick_task(void *arg);
-
 
 /**
  * @brief Run the UI task
@@ -215,10 +219,17 @@ static void init_lvgl(void) {
     buttons_indev_drv.feedback_cb = lvgl_buttons_feedback_cb;
     buttons_indev = lv_indev_drv_register(&buttons_indev_drv);
 
-    // Create the default group and assign the buttons input device to it
+    // Create the default group and assign the button input device to it
     lv_group_t *group = lv_group_create();
     lv_group_set_default(group);
     lv_indev_set_group(buttons_indev, group);
+
+    // Register the touchscreens as input devices
+    lv_indev_drv_init(&touch_indev_drv);
+    touch_indev_drv.type = LV_INDEV_TYPE_POINTER;
+    touch_indev_drv.read_cb = lvgl_touch_read_cb;
+    touch_indev_drv.feedback_cb = lvgl_touch_feedback_cb;
+    lv_indev_drv_register(&touch_indev_drv);
 
     // Create a periodic timer to call lvg_tick_task
     const esp_timer_create_args_t periodic_timer_args = {
@@ -245,6 +256,8 @@ static void free_lvgl(void) {
 
 /**
  * @brief Initializes the buttons
+ *
+ * @todo Move this to a separate button driver?
  *
  * Configures the 3 buttons as input, with internal pull-ups.
  */
@@ -300,7 +313,7 @@ static bool color_trans_done_cb(esp_lcd_panel_io_handle_t panel_io, esp_lcd_pane
 /**
  * @brief LVGL button indev callback.
  *
- * This function is called periodically by LVGL to read the buttons.
+ * This function is called periodically by LVGL to read the status of the buttons.
  *
  * @param[in] drv
  * @param[out] data
@@ -353,6 +366,55 @@ static void lvgl_buttons_feedback_cb(lv_indev_drv_t *drv, uint8_t event) {
 }
 
 /**
+ * @brief LVGL touchpad indev callback
+ *
+ * This function is called periodically by LVGL to read the status of the touchscreen.
+ * If use_raw_touch_input is true, the raw touch coordinates are used, otherwise the coordinates are calibrated.
+ *
+ * @uses use_raw_touch_input
+ *
+ * @param[in] drv
+ * @param[out] data
+ */
+static void lvgl_touch_read_cb(lv_indev_drv_t * drv, lv_indev_data_t*data) {
+    static lv_point_t last_point = {0};
+    static bool last_state = false;
+    tsc2046_data_t tsc2046_data;
+
+    tsc2046_data = tsc2046_read(use_raw_touch_input);
+
+    if (tsc2046_data.state == TSC2046_STATE_PRESSED) {
+        last_point.x = (int16_t)tsc2046_data.x;
+        last_point.y = (int16_t)tsc2046_data.y;
+        if (last_state == false) {
+            ESP_LOGD(TAG, "Touch: %d, %d", last_point.x, last_point.y);
+        }
+        last_state = true;
+    } else {
+        last_state = false;
+    }
+    data->point = last_point;
+    data->state = last_state ? LV_INDEV_STATE_PR : LV_INDEV_STATE_REL;
+}
+
+/**
+ * @brief LVGL touchscreen feedback callback
+ *
+ * This function is called by LVGL when a event is sent by the touchpad input device.
+ * Play a short beep when a the touchscreen is pressed (LV_EVENT_PRESSED).
+ *
+ * @todo Merge with lvgl_buttons_feedback_cb?
+ *
+ * @param[in] drv
+ * @param[in] event
+ */
+static void lvgl_touch_feedback_cb(lv_indev_drv_t * drv, uint8_t event) {
+    if ((lv_event_code_t)event == LV_EVENT_PRESSED) {
+        buzzer_beep(BUZZER_BEEP_TYPE_SHORT);
+    }
+}
+
+/**
  * @brief LVGL tick task
  *
  * Increment the LVGL tick
@@ -361,4 +423,56 @@ static void lvgl_buttons_feedback_cb(lv_indev_drv_t *drv, uint8_t event) {
  */
 static void lvgl_tick_task(void *arg) {
     lv_tick_inc(UI_TASK_LVGL_TICK_PERIOD_MS);
+}
+
+/**
+ * @brief Calibrate the touchscreen
+ *
+ * Calibrate the touchscreen using the given points. At least 3 points are required.
+ * The index of the points must match. For example, the first point in src_points corresponds to the first point in cal_points.
+ * The calibration data is not saved to flash, so it will be lost after a reboot.
+ * To save the calibration data to flash, use ui_task_store_tp_cal().
+ *
+ * @todo Return error code, so that the ui can display an error message
+ *
+ * @param[in] src_points The raw touchscreen coordinates
+ * @param[in] cal_points The target coordinates
+ * @param[in] len The number of points
+ */
+void ui_task_calibrate_tp(lv_point_t src_points[], lv_point_t cal_points[], size_t len) {
+    tsc2046_cal_data_point_t cal_data[len];
+
+    if (len < 3) {
+        ESP_LOGE(TAG, "At least 3 calibration points are required");
+        return;
+    }
+
+    for (size_t i = 0; i < len; i++) {
+        cal_data[i].x_raw = (uint16_t)src_points[i].x;
+        cal_data[i].y_raw = (uint16_t)src_points[i].y;
+        cal_data[i].x_cal = (uint16_t)cal_points[i].x;
+        cal_data[i].y_cal = (uint16_t)cal_points[i].y;
+
+        ESP_LOGD(TAG, "Calibration point %d: %d, %d -> %d, %d", i, cal_data[i].x_raw, cal_data[i].y_raw, cal_data[i].x_cal, cal_data[i].y_cal);
+    }
+
+    if (tsc2046_calibrate(cal_data, len) != ESP_OK) {
+        ESP_LOGE(TAG, "Calibration failed");
+    }
+}
+
+/**
+ * @brief Store the current touchscreen calibration data to flash
+ */
+void ui_task_store_tp_cal(void) {
+    tsc2046_store_cal_data();
+}
+
+/**
+ * @brief Use raw or calibrated touchscreen data
+ *
+ * @param[in] raw Use raw data if true, calibrated data if false
+ */
+void ui_task_use_raw_tp_data(bool raw) {
+    use_raw_touch_input = raw;
 }

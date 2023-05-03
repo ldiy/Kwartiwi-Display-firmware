@@ -33,16 +33,12 @@ void app_main(void) {
     esp_log_level_set("buzzer", ESP_LOG_DEBUG);
     xTaskCreate(&buzzer_task, "buzzer_task", 4096, NULL, 5, NULL);
 
+    // Initialize the touchscreen
+    esp_log_level_set("tsc2046", ESP_LOG_INFO);
+    tsc2046_init();
+
     // Initialize the display
     esp_log_level_set("ui_task", ESP_LOG_DEBUG);
     xTaskCreatePinnedToCore(&ui_task, "ui_task", 8192, NULL, 5, NULL, 1);
 
-    // Initialize the touchscreen
-    esp_log_level_set("tsc2046", ESP_LOG_DEBUG);
-    tsc2046_init();
-    // Read the touchscreen every 100ms
-    for(;;) {
-        tsc2046_read(false);
-        vTaskDelay(pdMS_TO_TICKS(100));
-    }
 }
