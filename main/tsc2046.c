@@ -3,6 +3,10 @@
  * @brief TSC2046 touch screen controller driver
  */
 
+#include <stdint.h>
+#include <stdbool.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "esp_system.h"
 #include "esp_log.h"
 #include "driver/spi_master.h"
@@ -17,29 +21,39 @@
 
 #define BUFFER_SIZE 5   // 2 * 2 * 1 = 2 measurements * 2 bytes/measurement + 1 (first(rx) or last(tx) byte is a 0 byte)
 #define Z_THRESHOLD 100 // Minimum z value to be considered a valid touch
-#define SAMPLE_COUNT 4   // Number of samples to average
+#define SAMPLE_COUNT 3  // Number of samples to average
+
 
 static char *TAG = "tsc2046";
 static spi_device_handle_t tsc2046_spi_dev;
+static SemaphoreHandle_t tsc2046_cal_data_mutex;
 
 /**
  * Calibration data
  * X = cal_data[0] * x_raw + cal_data[1] * y_raw + cal_data[2]
  * Y = cal_data[3] * x_raw + cal_data[4] * y_raw + cal_data[5]
  */
-float cal_data[6];
-size_t cal_data_size = sizeof(cal_data);
+static double cal_data[6];
+static size_t cal_data_size = sizeof(cal_data);
+
+// Function prototypes
+static esp_err_t read_cal_data_nvs(void);
+
 
 /**
  * @brief Initialize the TSC2046 touch screen controller
  *
  * This function will setup the SPI bus and device, and read the calibration data from NVS.
  */
-void tsc2046_init(void) {
-    nvs_handle_t nvs_handle;
-    esp_err_t err;
-
+esp_err_t tsc2046_init(void) {
     ESP_LOGI(TAG, "Initializing TSC2046 touch screen controller");
+
+    // Create mutex for cal data
+    tsc2046_cal_data_mutex = xSemaphoreCreateMutex();
+    if (tsc2046_cal_data_mutex == NULL) {
+        ESP_LOGE(TAG, "Failed to create mutex for cal data");
+        return ESP_FAIL;
+    }
 
     // Initialize the SPI bus
     spi_bus_config_t bus_cfg = {
@@ -56,7 +70,10 @@ void tsc2046_init(void) {
         .flags = 0,
         .intr_flags = 0,
     };
-    ESP_ERROR_CHECK(spi_bus_initialize(TSC2046_SPI_HOST, &bus_cfg, SPI_DMA_CH_AUTO));
+    if(spi_bus_initialize(TSC2046_SPI_HOST, &bus_cfg, SPI_DMA_CH_AUTO) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize SPI bus");
+        return ESP_FAIL;
+    }
 
     // Initialize the SPI device
     spi_device_interface_config_t dev_cfg = {
@@ -71,25 +88,18 @@ void tsc2046_init(void) {
             .address_bits = 0,
             .dummy_bits = 0,
     };
-    ESP_ERROR_CHECK(spi_bus_add_device(SPI2_HOST, &dev_cfg, &tsc2046_spi_dev));
+    if(spi_bus_add_device(TSC2046_SPI_HOST, &dev_cfg, &tsc2046_spi_dev) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to allocate the tsc2046 device on the SPI bus");
+        return ESP_FAIL;
+    }
 
-    // Read cal data from NVS
-    ESP_ERROR_CHECK(nvs_open(TSC2046_NVS_NAMESPACE, NVS_READONLY, &nvs_handle));
-    err = nvs_get_blob(nvs_handle, TSC2046_NVS_KEY_CAL_DATA, cal_data, &cal_data_size);
-    if (err == ESP_ERR_NVS_NOT_FOUND) {
-        // Use the raw X and Y values (the other factors are already 0)
-        cal_data[0] = 1;
-        cal_data[4] = 1;
-        ESP_LOGI(TAG, "Calibration data NOT found, using raw data");
+    // Read the calibration data from NVS
+    if (read_cal_data_nvs() != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to read cal data from NVS");
+        return ESP_FAIL;
     }
-    else if(err != ESP_OK) {
-        ESP_LOGE(TAG, "Error reading cal data from NVS: %d", err);
-        abort();
-    }
-    else {
-        ESP_LOGI(TAG, "Calibration data found: %f, %f, %f, %f, %f, %f", cal_data[0], cal_data[1], cal_data[2], cal_data[3], cal_data[4], cal_data[5]);
-    }
-    nvs_close(nvs_handle);
+
+    return ESP_OK;
 }
 
 /**
@@ -98,10 +108,13 @@ void tsc2046_init(void) {
  * This function will read the touch screen controller.
  * If a valid touch is detected, it will return the X and Y coordinates.
  * If no touch is detected, it will return 0 for X and Y.
- * SAMPLE_COUNT samples will be taken and averaged.
+ * SAMPLE_COUNT + 1 samples will be taken. The first one will be discarded, and the remaining ones will be averaged.
  *
  * @warning This function is not thread safe. It should only be called from one task.
- * @param[in] raw If true, return raw X and Y values. If false, return calibrated X and Y values.
+ *
+ * @param[in] raw
+ *   - true, return raw X and Y values.
+ *   - false, return calibrated X and Y values.
  * @return The touchscreen status (x and y coordinates and pressed or not)
  */
 tsc2046_data_t tsc2046_read(bool raw) {
@@ -136,6 +149,7 @@ tsc2046_data_t tsc2046_read(bool raw) {
     result.state = TSC2046_STATE_PRESSED;
     spi_tran.tx_buffer = tx_data_xy;
     spi_tran.rx_buffer = rx_data;
+    ESP_ERROR_CHECK(spi_device_polling_transmit(tsc2046_spi_dev, &spi_tran));  // Discard the first sample as it is not accurate
     for (uint8_t i = 0; i < SAMPLE_COUNT; i++) {
         ESP_ERROR_CHECK(spi_device_polling_transmit(tsc2046_spi_dev, &spi_tran));
         result.x += ((rx_data[1] << 8) + rx_data[2]) >> 3;
@@ -150,8 +164,10 @@ tsc2046_data_t tsc2046_read(bool raw) {
 
     // Apply calibration data if not in raw mode
     if (!raw) {
-        result.x = (uint16_t)(cal_data[0] * (float)result.x + cal_data[1] * (float)result.y + cal_data[2]);
-        result.y = (uint16_t)(cal_data[3] * (float)result.x + cal_data[4] * (float)result.y + cal_data[5]);
+        xSemaphoreTake(tsc2046_cal_data_mutex, portMAX_DELAY);
+        result.x = (uint16_t)(cal_data[0] * (double)result.x + cal_data[1] * (double)result.y + cal_data[2]);
+        result.y = (uint16_t)(cal_data[3] * (double)result.x + cal_data[4] * (double)result.y + cal_data[5]);
+        xSemaphoreGive(tsc2046_cal_data_mutex);
     }
 
     ESP_LOGD(TAG, "Pressed: x: %d, y: %d", result.x, result.y);
@@ -159,6 +175,200 @@ tsc2046_data_t tsc2046_read(bool raw) {
     return result;
 }
 
-void tsc2046_calibrate(tsc2046_cal_data_point_t points[], size_t size) {
-    // TODO: Implement calibration
+/**
+ * @brief Calibrate the touch screen to the supplied calibration points
+ *
+ * This function will calibrate the touch screen controller using the supplied calibration points.
+ * The calibration points should be evenly spaced across the screen.
+ * At least 3 calibration points are required, 5 or more is recommended.
+ *
+ * This function uses a MMSE-based multi-point calibration algorithm.
+ * @see https://www.analog.com/media/en/technical-documentation/application-notes/an-1021.pdf
+ * @see https://www.embedded.com/how-to-calibrate-touch-screens/
+ *
+ * @note The calibration data will be applied temporarily, and will be lost when the device is reset.
+ * To save the calibration data, call tsc2046_store_cal_data().
+ *
+ * @note This function modifies cal_data.
+ *
+ * @param[in] points The calibration points. (must be >= 3 points)
+ * @param[in] num_points The number of calibration points supplied.
+ * @return
+ *   - ESP_OK on success
+ *   - ESP_ERR_INVALID_ARG if less than 3 calibration points are supplied or if the calibration points are not valid (e.g. not evenly spaced)
+ */
+esp_err_t tsc2046_calibrate(const tsc2046_cal_data_point_t points[], const size_t num_points) {
+    double a[3], b[3], c[3], d[3], k;
+
+    if (num_points < 3) {
+        ESP_LOGE(TAG, "Not enough calibration points, at least 3 are required");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    for (int i = 0; i < 3; i++) {
+        a[i] = 0;
+        b[i] = 0;
+        c[i] = 0;
+        d[i] = 0;
+    }
+
+    for (int i = 0; i < num_points; i++) {
+        a[2] += (double)points[i].x_raw;
+        b[2] += (double)points[i].y_raw;
+        c[2] += (double)points[i].x_cal;
+        d[2] += (double)points[i].y_cal;
+        a[0] += (double)points[i].x_raw * (double)points[i].x_raw;
+        a[1] += (double)points[i].x_raw * (double)points[i].y_raw;
+        b[0] = a[1];
+        b[1] += (double)points[i].y_raw * (double)points[i].y_raw;
+        c[0] += (double)points[i].x_raw * (double)points[i].x_cal;
+        c[1] += (double)points[i].y_raw * (double)points[i].x_cal;
+        d[0] += (double)points[i].x_raw * (double)points[i].y_cal;
+        d[1] += (double)points[i].y_raw * (double)points[i].y_cal;
+    }
+
+    if (a[2] == 0 || b[2] == 0) {
+        ESP_LOGE(TAG, "Calibration failed, calibration points are not valid");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    a[0] /= a[2];
+    a[1] /= b[2];
+    b[0] /= a[2];
+    b[1] /= b[2];
+    c[0] /= a[2];
+    c[1] /= b[2];
+    d[0] /= a[2];
+    d[1] /= b[2];
+    a[2] /= (double)num_points;
+    b[2] /= (double)num_points;
+    c[2] /= (double)num_points;
+    d[2] /= (double)num_points;
+
+    k = (a[0] - a[2]) * (b[1] - b[2])- (a[1] - a[2]) * (b[0] - b[2]);
+
+    if (k == 0) {
+        ESP_LOGE(TAG, "Calibration failed, calibration points are not valid");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    xSemaphoreTake(tsc2046_cal_data_mutex, portMAX_DELAY);
+
+    cal_data[0] = (((c[0] - c[2]) * (b[1] - b[2])
+                           - (c[1] - c[2]) * (b[0] - b[2])
+                          ) / k);
+    cal_data[1] = (((a[0] - a[2]) * (c[1] - c[2])
+                           - (a[1] - a[2]) * (c[0] - c[2])
+                          ) / k);
+    cal_data[2] = ((b[0] * (a[2] * c[1] - a[1] * c[2])
+                           + b[1] * (a[0] * c[2] - a[2] * c[0])
+                           + b[2] * (a[1] * c[0] - a[0] * c[1])
+                          ) / k);
+    cal_data[3] = (((d[0] - d[2]) * (b[1] - b[2])
+                           - (d[1] - d[2]) * (b[0] - b[2])
+                          ) / k);
+    cal_data[4] = (((a[0] - a[2]) * (d[1] - d[2])
+                           - (a[1] - a[2]) * (d[0] - d[2])
+                          ) / k);
+    cal_data[5] = ((b[0] * (a[2] * d[1] - a[1] * d[2])
+                           + b[1] * (a[0] * d[2] - a[2] * d[0])
+                           + b[2] * (a[1] * d[0] - a[0] * d[1])
+                          ) / k);
+    ESP_LOGD(TAG, "Calibration data: %f %f %f %f %f %f", cal_data[0], cal_data[1], cal_data[2], cal_data[3], cal_data[4], cal_data[5]);
+    xSemaphoreGive(tsc2046_cal_data_mutex);
+
+    return ESP_OK;
+}
+
+/**
+ * @brief Store the calibration data in NVS
+ *
+ * The calibration data is stored as a blob, as NVS does not support storing floats or arrays of floats.
+ *
+ * @return ESP_OK on success, ESP_FAIL otherwise
+ */
+esp_err_t tsc2046_store_cal_data(void) {
+    nvs_handle_t nvs_handle;
+    esp_err_t err;
+
+    // Open NVS storage with the TSC2046 namespace
+    if(nvs_open(TSC2046_NVS_NAMESPACE, NVS_READWRITE, &nvs_handle) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to open NVS with " TSC2046_NVS_NAMESPACE);
+        return ESP_FAIL;
+    }
+
+    // Get the cal data semaphore
+    xSemaphoreTake(tsc2046_cal_data_mutex, portMAX_DELAY);
+
+    // Write the cal data to NVS
+    err = nvs_set_blob(nvs_handle, TSC2046_NVS_KEY_CAL_DATA, cal_data, cal_data_size);
+    if(err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to write calibration data to NVS");
+        xSemaphoreGive(tsc2046_cal_data_mutex);
+        nvs_close(nvs_handle);
+        return ESP_FAIL;
+    }
+
+    // Commit the changes to NVS
+    err = nvs_commit(nvs_handle);
+    if(err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to commit calibration data to NVS");
+        xSemaphoreGive(tsc2046_cal_data_mutex);
+        nvs_close(nvs_handle);
+        return ESP_FAIL;
+    }
+
+    // Release the cal data semaphore
+    xSemaphoreGive(tsc2046_cal_data_mutex);
+
+    // Close the NVS storage
+    nvs_close(nvs_handle);
+
+    return ESP_OK;
+}
+
+/**
+ * @brief Read the calibration data from NVS
+ *
+ * Read the calibration data from NVS.
+ * If the calibration data is not stored in NVS, the raw X and Y values will be used.
+ * The calibration data is stored as a blob in NVS.
+ *
+ * @return ESP_OK on success
+ */
+static esp_err_t read_cal_data_nvs(void) {
+    nvs_handle_t nvs_handle;
+    esp_err_t err;
+
+    // Open NVS storage with the TSC2046 namespace
+    if(nvs_open(TSC2046_NVS_NAMESPACE, NVS_READONLY, &nvs_handle) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to open NVS with " TSC2046_NVS_NAMESPACE);
+        return ESP_FAIL;
+    }
+
+    // Get the cal data semaphore
+    xSemaphoreTake(tsc2046_cal_data_mutex, portMAX_DELAY);
+
+    // Read the cal data from NVS
+    err = nvs_get_blob(nvs_handle, TSC2046_NVS_KEY_CAL_DATA, cal_data, &cal_data_size);
+
+    // If the cal data is not stored in NVS, use the raw X and Y values
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+        // Use the raw X and Y values (the other factors should be already zeroed)
+        cal_data[0] = 1;
+        cal_data[4] = 1;
+        ESP_LOGI(TAG, "Calibration data NOT found, using raw data");
+    }
+    else if(err != ESP_OK) {
+        ESP_LOGE(TAG, "Error reading cal data from NVS: %d", err);
+    }
+    else {
+        ESP_LOGI(TAG, "Calibration data found: %f, %f, %f, %f, %f, %f", cal_data[0], cal_data[1], cal_data[2], cal_data[3], cal_data[4], cal_data[5]);
+    }
+
+    // Free resources
+    xSemaphoreGive(tsc2046_cal_data_mutex);
+    nvs_close(nvs_handle);
+
+    return err;
 }

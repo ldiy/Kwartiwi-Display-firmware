@@ -13,7 +13,7 @@
 #define TSC2046_PIN_NUM_BUSY 42
 
 #define TSC2046_SPI_HOST            SPI2_HOST
-#define TSC2046_SPI_CLK_SPEED_HZ    (2*1000*1000) // 2 MHz
+#define TSC2046_SPI_CLK_SPEED_HZ    (5*100*1000) // 500 kHz
 
 #define TSC2046_NVS_NAMESPACE "tsc2046"
 #define TSC2046_NVS_KEY_CAL_DATA "cal_data"
@@ -38,8 +38,10 @@ typedef struct {
 } tsc2046_cal_data_point_t;
 
 // Function prototypes
-void tsc2046_init(void);
+esp_err_t tsc2046_init(void);
 tsc2046_data_t tsc2046_read(bool raw);
+esp_err_t tsc2046_calibrate(const tsc2046_cal_data_point_t points[], size_t num_points);
+esp_err_t tsc2046_store_cal_data(void);
 
 
 #endif //TSC2046_H
