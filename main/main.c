@@ -9,6 +9,8 @@
 #include "buzzer.h"
 #include "ui_task.h"
 #include "tsc2046.h"
+#include "web_client.h"
+#include "data_manager.h"
 
 void app_main(void) {
 
@@ -26,8 +28,8 @@ void app_main(void) {
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
     // Initialize networking
-//    esp_log_level_set("networking", ESP_LOG_DEBUG);
-//    setup_networking();
+    esp_log_level_set("networking", ESP_LOG_DEBUG);
+    setup_networking();
 
     // Initialize the buzzer
     esp_log_level_set("buzzer", ESP_LOG_DEBUG);
@@ -37,8 +39,16 @@ void app_main(void) {
     esp_log_level_set("tsc2046", ESP_LOG_INFO);
     tsc2046_init();
 
-    // Initialize the display
+
+    // Init data manager
+    esp_log_level_set("data_manager", ESP_LOG_DEBUG);
+    data_manager_init();
+
+    // Run the web client
+    esp_log_level_set("web_client", ESP_LOG_DEBUG);
+    xTaskCreatePinnedToCore(&web_client_task, "web_client_task", 4096, NULL, 5, NULL,1);
+
+    // Initialize the UI
     esp_log_level_set("ui_task", ESP_LOG_DEBUG);
     xTaskCreatePinnedToCore(&ui_task, "ui_task", 8192, NULL, 5, NULL, 1);
-
 }
