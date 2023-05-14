@@ -5,9 +5,18 @@
 #include <time.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "esp_event.h"
 
 #define DATA_MANAGER_MAX_DEMAND_YEAR_ITEMS 13
+
 #define DATA_MANAGER_MAX_DEMAND_SHORT_TERM_ITEMS (60 * 15)  // 1 second * 15 minutes
+
+ESP_EVENT_DECLARE_BASE(DATA_MANAGER_EVENTS);
+
+typedef enum {
+    DATA_MANAGER_NEW_METER_DATA_AVAILABLE,
+    DATA_MANAGER_NEW_METER_HISTORY_DATA_AVAILABLE,
+} data_manager_event_id_t;
 
 
 enum data_manager_data_fields_e {
@@ -67,6 +76,8 @@ void data_manager_set_field(enum data_manager_data_fields_e field, void * value)
 void data_manager_get_field(enum data_manager_data_fields_e field, void * value);
 void data_manager_add_max_demand_short_term_history_item(float value, time_t timestamp);
 uint16_t data_manager_get_short_term_max_demand_history(data_manager_demand_data_point_t items[], uint16_t max_items);
+void data_manager_notify_new_meter_data_available(void);
+void data_manager_notify_new_meter_history_data_available(void);
 
 
 #endif //DATA_MANAGER_H

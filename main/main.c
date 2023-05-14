@@ -5,12 +5,21 @@
 #include "nvs_flash.h"
 #include "esp_system.h"
 #include "esp_event.h"
+#include "cJSON.h"
 #include "networking.h"
 #include "buzzer.h"
 #include "ui_task.h"
 #include "tsc2046.h"
 #include "web_client.h"
 #include "data_manager.h"
+
+esp_event_loop_handle_t loop_handle;
+
+static void * CJSON_CDECL cjson_malloc(size_t size)
+{
+    return heap_caps_malloc(size, MALLOC_CAP_SPIRAM);
+}
+
 
 void app_main(void) {
 
@@ -27,9 +36,21 @@ void app_main(void) {
     // Initialize the event loop
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
-    // Initialize networking
-    esp_log_level_set("networking", ESP_LOG_DEBUG);
-    setup_networking();
+    esp_event_loop_args_t loop_args = {
+        .queue_size = 5,
+        .task_name = "event_loop_task",
+        .task_priority = 5,
+        .task_stack_size = 4096,
+        .task_core_id = 0
+    };
+    ESP_ERROR_CHECK(esp_event_loop_create(&loop_args, &loop_handle));
+
+    // Initialize the CJson library to use the psram
+    static cJSON_Hooks hooks = {
+        .malloc_fn = cjson_malloc,
+        .free_fn = heap_caps_free,
+    };
+    cJSON_InitHooks(&hooks);
 
     // Initialize the buzzer
     esp_log_level_set("buzzer", ESP_LOG_DEBUG);
@@ -39,16 +60,20 @@ void app_main(void) {
     esp_log_level_set("tsc2046", ESP_LOG_INFO);
     tsc2046_init();
 
-
     // Init data manager
     esp_log_level_set("data_manager", ESP_LOG_DEBUG);
     data_manager_init();
+
+    // Initialize the UI
+    esp_log_level_set("ui_task", ESP_LOG_DEBUG);
+    xTaskCreatePinnedToCore(&ui_task, "ui_task", 8192, NULL, 5, NULL, 1);
+
+    // Initialize networking
+    esp_log_level_set("networking", ESP_LOG_DEBUG);
+    setup_networking();
 
     // Run the web client
     esp_log_level_set("web_client", ESP_LOG_DEBUG);
     xTaskCreatePinnedToCore(&web_client_task, "web_client_task", 4096, NULL, 5, NULL,1);
 
-    // Initialize the UI
-    esp_log_level_set("ui_task", ESP_LOG_DEBUG);
-    xTaskCreatePinnedToCore(&ui_task, "ui_task", 8192, NULL, 5, NULL, 1);
 }

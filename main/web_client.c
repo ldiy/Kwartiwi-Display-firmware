@@ -21,10 +21,15 @@
 #include "data_manager.h"
 #include "web_client.h"
 
+#define DISCONNECTED_STATUS_FAILED_REQ_COUNT 5  // Number of consecutive failed requests before setting the status to disconnected
 #define REQUEST_INTERVAL_MS 2000
-#define HTTP_BUF_SIZE 2048
+#define HTTP_BUF_SIZE (100 * 1024)  // 100 KB
 #define API_METER_DATA_ENDPOINT "/api/meter-data"
 #define API_METER_DATA_HISTORY_ENDPOINT "/api/meter-data-history"
+
+ESP_EVENT_DEFINE_BASE(WEB_CLIENT_EVENTS);
+
+extern esp_event_loop_handle_t loop_handle;
 
 // parse function callback type
 typedef esp_err_t (*parse_publish_data_cb_t)(uint8_t *buf, uint32_t len);
@@ -32,6 +37,7 @@ typedef esp_err_t (*parse_publish_data_cb_t)(uint8_t *buf, uint32_t len);
 static const char *TAG = "web_client";
 static uint8_t *http_buf = NULL;
 static esp_http_client_config_t config;
+static bool connected = false;
 
 // Function prototypes
 static esp_err_t web_client_init(void);
@@ -69,20 +75,27 @@ _Noreturn void web_client_task(void *pvParameters) {
         abort();
     }
 
+    ESP_ERROR_CHECK(esp_event_post_to(loop_handle, WEB_CLIENT_EVENTS, WEB_CLIENT_INITIALIZED, NULL, 0, portMAX_DELAY));
+
     // Request meter data history
     while (request(API_METER_DATA_HISTORY_ENDPOINT, parse_publish_meter_data_history) != ESP_OK) {
         ESP_LOGE(TAG, "Failed to request meter data history. Retrying in %d ms", REQUEST_INTERVAL_MS);
         vTaskDelay(pdMS_TO_TICKS(REQUEST_INTERVAL_MS));
     }
+    data_manager_notify_new_meter_history_data_available();
 
     // Request meter data periodically
     for(;;) {
-        request(API_METER_DATA_ENDPOINT, parse_publish_meter_data);
+        if(request(API_METER_DATA_ENDPOINT, parse_publish_meter_data) == ESP_OK) {
+            data_manager_notify_new_meter_data_available();
+        } else {
+            ESP_LOGE(TAG, "Failed to request meter data. Retrying in %d ms", REQUEST_INTERVAL_MS);
+        }
         vTaskDelay(pdMS_TO_TICKS(REQUEST_INTERVAL_MS));
     }
 
     // Free resources
-    free(http_buf);
+    heap_caps_free(http_buf);
     vTaskDelete(NULL);
 }
 
@@ -94,7 +107,7 @@ _Noreturn void web_client_task(void *pvParameters) {
  * @return ESP_OK on success, ESP_FAIL otherwise
  */
 static esp_err_t web_client_init(void) {
-    http_buf = malloc(HTTP_BUF_SIZE);
+    http_buf = heap_caps_malloc(HTTP_BUF_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (http_buf == NULL) {
         ESP_LOGE(TAG, "Failed to allocate HTTP buffer");
         return ESP_ERR_NO_MEM;
@@ -102,7 +115,7 @@ static esp_err_t web_client_init(void) {
 
     config.user_data = http_buf;
     config.event_handler = http_event_handler;
-    config.host = "10.10.10.6"; // TODO: get from NVS or mDNS
+    config.host = "10.10.10.31"; // TODO: get from NVS or mDNS
     config.path = "/";
 
     return ESP_OK;
@@ -122,6 +135,7 @@ static esp_err_t web_client_init(void) {
  * @return
  */
 static esp_err_t request(const char *path, parse_publish_data_cb_t cb) {
+    static uint8_t failed_req_count = 0;
     esp_err_t err;
     esp_http_client_handle_t client;
 
@@ -158,9 +172,23 @@ static esp_err_t request(const char *path, parse_publish_data_cb_t cb) {
             ESP_LOGW(TAG, "HTTP GET request returned non-200 status code: %d", esp_http_client_get_status_code(client));
             err = ESP_FAIL;
         }
+
+        // Reset the failed request count and set the status to connected
+        if (!connected) {
+            ESP_LOGI(TAG, "Setting status to connected");
+            failed_req_count = 0;
+            connected = true;
+            ESP_ERROR_CHECK(esp_event_post_to(loop_handle, WEB_CLIENT_EVENTS, WEB_CLIENT_EVENT_CONNECTED, NULL, 0, portMAX_DELAY));
+        }
     }
     else {
         ESP_LOGE(TAG, "HTTP GET request failed: %s", esp_err_to_name(err));
+        failed_req_count++;
+        if (failed_req_count == DISCONNECTED_STATUS_FAILED_REQ_COUNT) {
+            ESP_LOGE(TAG, "Maximum failed request count reached. Setting status to disconnected");
+            connected = false;
+            ESP_ERROR_CHECK(esp_event_post_to(loop_handle, WEB_CLIENT_EVENTS, WEB_CLIENT_EVENT_DISCONNECTED, NULL, 0, portMAX_DELAY));
+        }
     }
 
     // Close the connection and free resources
@@ -200,6 +228,9 @@ static esp_err_t http_event_handler(esp_http_client_event_t *e) {
             if (e->user_data != NULL) {
                 // Copy the received data to the user_data buffer
                 size_t len = e->data_len > (HTTP_BUF_SIZE - total_len) ? (HTTP_BUF_SIZE - total_len) : e->data_len;
+                if (len < e->data_len) {
+                    ESP_LOGW(TAG, "HTTP_EVENT_ON_DATA: data_len is larger than the user_data buffer");
+                }
                 memcpy(e->user_data + total_len, e->data, len);
                 total_len += len;
             }
