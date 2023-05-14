@@ -1,0 +1,54 @@
+#ifdef __has_include
+    #if __has_include("lvgl.h")
+        #ifndef LV_LVGL_H_INCLUDE_SIMPLE
+            #define LV_LVGL_H_INCLUDE_SIMPLE
+        #endif
+    #endif
+#endif
+
+#if defined(LV_LVGL_H_INCLUDE_SIMPLE)
+    #include "lvgl.h"
+#else
+    #include "lvgl/lvgl.h"
+#endif
+
+
+#ifndef LV_ATTRIBUTE_MEM_ALIGN
+#define LV_ATTRIBUTE_MEM_ALIGN
+#endif
+
+#ifndef LV_ATTRIBUTE_IMG_CONNECTED_SYMBOL_14_14
+#define LV_ATTRIBUTE_IMG_CONNECTED_SYMBOL_14_14
+#endif
+
+const LV_ATTRIBUTE_MEM_ALIGN LV_ATTRIBUTE_LARGE_CONST LV_ATTRIBUTE_IMG_CONNECTED_SYMBOL_14_14 uint8_t connected_symbol_14_14_map[] = {
+  0xff, 0xff, 0xff, 0xff, 	/*Color of index 0*/
+  0x8e, 0x8e, 0x8e, 0xff, 	/*Color of index 1*/
+  0x36, 0x36, 0x36, 0xff, 	/*Color of index 2*/
+  0x02, 0x02, 0x02, 0xff, 	/*Color of index 3*/
+
+  0xff, 0xff, 0xff, 0xa0, 
+  0xff, 0xff, 0x6e, 0x20, 
+  0xff, 0xf9, 0x04, 0xb0, 
+  0xff, 0x94, 0x01, 0xf0, 
+  0xfe, 0xd0, 0x00, 0xb0, 
+  0xfd, 0x74, 0x00, 0x70, 
+  0xf9, 0x1d, 0x01, 0xf0, 
+  0xf4, 0x07, 0x46, 0xf0, 
+  0xd0, 0x01, 0xd7, 0xf0, 
+  0xe0, 0x00, 0x7b, 0xf0, 
+  0xf4, 0x01, 0x6f, 0xf0, 
+  0xe1, 0x06, 0xff, 0xf0, 
+  0x8b, 0x9b, 0xff, 0xf0, 
+  0xaf, 0xff, 0xff, 0xf0, 
+};
+
+const lv_img_dsc_t connected_symbol_14_14 = {
+  .header.cf = LV_IMG_CF_INDEXED_2BIT,
+  .header.always_zero = 0,
+  .header.reserved = 0,
+  .header.w = 14,
+  .header.h = 14,
+  .data_size = 72,
+  .data = connected_symbol_14_14_map,
+};

@@ -19,11 +19,16 @@
 #include "ui.h"
 #include "buzzer.h"
 #include "tsc2046.h"
+#include "data_manager.h"
+#include "networking.h"
+#include "web_client.h"
 #include "ui_task.h"
 
 #define PIXEL_CLOCK_HZ  (10 * 1000 * 1000)  // 10 MHz
 #define LVGL_BUFFER_SIZE (UI_TASK_DISPLAY_WIDTH * UI_TASK_DISPLAY_HEIGHT * sizeof(lv_color_t) / 5) // 1/5 of the display area (at least 1/10 is recommended)
 #define MAX_TRANSFER_SIZE LVGL_BUFFER_SIZE
+
+extern esp_event_loop_handle_t loop_handle;
 
 
 static const char *TAG = "ui_task";
@@ -36,6 +41,7 @@ static lv_indev_drv_t buttons_indev_drv;
 static lv_indev_drv_t touch_indev_drv;
 static esp_timer_handle_t lvgl_periodic_timer;
 static bool use_raw_touch_input = false;
+SemaphoreHandle_t lvgl_mutex;
 
 // Function prototypes
 static void init_display(void);
@@ -51,6 +57,7 @@ static void lvgl_buttons_feedback_cb(lv_indev_drv_t *drv, uint8_t event);
 static void lvgl_touch_read_cb(lv_indev_drv_t *drv, lv_indev_data_t *data);
 static void lvgl_touch_feedback_cb(lv_indev_drv_t *drv, uint8_t event);
 static void lvgl_tick_task(void *arg);
+static void update_ui_on_event(void* handler_arg, esp_event_base_t base, int32_t id, void* event_data);
 
 /**
  * @brief Run the UI task
@@ -63,11 +70,21 @@ static void lvgl_tick_task(void *arg);
  * @param pvParameters unused
  */
 _Noreturn void ui_task(void *pvParameters) {
+    lvgl_mutex = xSemaphoreCreateMutex();
+
+    if (lvgl_mutex == NULL) {
+        ESP_LOGE(TAG, "Failed to create lvgl mutex");
+        vTaskDelete(NULL);
+        abort();
+    }
+
     // Initialize the display
     init_display();
 
     // Initialize the buttons
     init_buttons();
+
+    xSemaphoreTake(lvgl_mutex, portMAX_DELAY);
 
     // Initialize LVGL
     init_lvgl();
@@ -75,12 +92,20 @@ _Noreturn void ui_task(void *pvParameters) {
     // Initialize the UI
     ui_init();
 
+    xSemaphoreGive(lvgl_mutex);
+
+    esp_event_handler_register_with(loop_handle, DATA_MANAGER_EVENTS, ESP_EVENT_ANY_ID, update_ui_on_event, NULL);
+    esp_event_handler_register_with(loop_handle, WEB_CLIENT_EVENTS, ESP_EVENT_ANY_ID, update_ui_on_event, NULL);
+
     // Set the backlight on
     display_set_backlight(true);
 
     for(;;) {
         vTaskDelay(pdMS_TO_TICKS(10));
+
+        xSemaphoreTake(lvgl_mutex, portMAX_DELAY);
         lv_task_handler();
+        xSemaphoreGive(lvgl_mutex);
     }
 
     // Free resources
@@ -475,4 +500,79 @@ void ui_task_store_tp_cal(void) {
  */
 void ui_task_use_raw_tp_data(bool raw) {
     use_raw_touch_input = raw;
+}
+
+/**
+ * @brief Event handler for events from the event loop
+ *
+ * This function is called by the event loop when an event is dispatched.
+ * It updates the UI accordingly.
+ *
+ * @note The data manager, ui and main screen must be initialized before calling this function.
+ *
+ * @param[in] handler_arg
+ * @param[in] base
+ * @param[in] id
+ * @param[in] event_data
+ */
+static void update_ui_on_event(void* handler_arg, esp_event_base_t base, int32_t id, void* event_data)
+{
+    static bool first_run = true;
+    ESP_LOGD(TAG, "Event dispatched from event loop base=%s, event_id=%ld", base, id);
+
+    if (xSemaphoreTake(lvgl_mutex, pdMS_TO_TICKS(500)) != pdTRUE) {
+        ESP_LOGE(TAG, "Could not take lvgl mutex within 500ms");
+        return;
+    }
+
+    if (base == DATA_MANAGER_EVENTS) {
+        SemaphoreHandle_t data_manager_mutex_handle = data_manager_get_data_mutex_handle();
+
+        if (xSemaphoreTake(data_manager_mutex_handle, pdMS_TO_TICKS(500)) != pdTRUE) {
+            ESP_LOGE(TAG, "Could not take data manager mutex within 500ms");
+            xSemaphoreGive(lvgl_mutex);
+            return;
+        }
+
+        data_manager_meter_data_t *meter_data = data_manager_get_meter_data();
+        data_manager_history_data_t *history_data = data_manager_get_history_data();
+        switch ((data_manager_event_id_t)id) {
+            case DATA_MANAGER_NEW_METER_DATA_AVAILABLE:
+                ESP_LOGD(TAG, "New meter data available, updating UI");
+                set_power_consumption((uint16_t)(meter_data->current_power_usage * 1000));
+                set_predicted_peak((uint16_t)(meter_data->predicted_peak.demand * 1000));
+                add_peak_demand_data_point(meter_data->p1_timestamp, (uint16_t)(meter_data->current_avg_demand * 1000));
+                set_new_max_peak_demand((uint16_t)(meter_data->max_demand_active_month.demand * 1000));
+                if (first_run) {
+                    first_run = false;
+                    ui_set_initialized(true);
+                    set_max_peak_line((uint16_t)(meter_data->max_demand_active_month.demand * 1000));
+                }
+                break;
+            case DATA_MANAGER_NEW_METER_HISTORY_DATA_AVAILABLE:
+                ESP_LOGD(TAG, "New meter history data available, updating UI");
+                reset_peak_demand_chart_data();
+                ESP_LOGD(TAG, "Max demand short term items: %d", history_data->max_demand_short_term_items);
+                for (uint16_t i = 0; i < history_data->max_demand_short_term_items; i++) {
+                    add_peak_demand_data_point(history_data->max_demand_short_term[i].timestamp, (uint16_t)(history_data->max_demand_short_term[i].demand * 1000));
+                }
+                break;
+        }
+        xSemaphoreGive(data_manager_mutex_handle);
+
+    }
+    else if (base == WEB_CLIENT_EVENTS) {
+        switch ((web_client_event_id_t)id) {
+            case WEB_CLIENT_INITIALIZED:
+                break;
+            case WEB_CLIENT_EVENT_CONNECTED:
+                set_connected_status(true);
+                break;
+            case WEB_CLIENT_EVENT_DISCONNECTED:
+                set_connected_status(false);
+                break;
+        }
+    }
+
+    xSemaphoreGive(lvgl_mutex);
 }
