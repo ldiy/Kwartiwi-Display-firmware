@@ -28,7 +28,7 @@ LV_IMG_DECLARE(cal_cross);
 #define RESTART_BTN_MSG "Restart"
 
 // UI elements
-static lv_obj_t * cal_screen;
+lv_obj_t * tp_cal_screen;
 static lv_obj_t * cross_img;
 static lv_obj_t * status_label;
 static lv_obj_t * info_label;
@@ -56,7 +56,7 @@ static void confirm_msg_box_cb(lv_event_t * event);
  */
 void tp_call_load_screen(void) {
     tp_cal_screen_init();
-    lv_disp_load_scr(cal_screen);
+    lv_disp_load_scr(tp_cal_screen);
 }
 
 /**
@@ -64,13 +64,13 @@ void tp_call_load_screen(void) {
  */
 static void tp_cal_screen_init(void) {
     // Screen
-    cal_screen = lv_obj_create(NULL);
-    lv_obj_set_style_bg_color(cal_screen, lv_color_hex(0xFFFFFF), LV_STATE_DEFAULT);
-    lv_obj_set_ext_click_area(cal_screen, MAX_TP_DATA_VALUE);
-    lv_obj_add_event_cb(cal_screen, touched_cb, LV_EVENT_PRESSED, NULL);
+    tp_cal_screen = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(tp_cal_screen, lv_color_hex(0xFFFFFF), LV_STATE_DEFAULT);
+    lv_obj_set_ext_click_area(tp_cal_screen, MAX_TP_DATA_VALUE);
+    lv_obj_add_event_cb(tp_cal_screen, touched_cb, LV_EVENT_PRESSED, NULL);
 
     // Info label
-    info_label = lv_label_create(cal_screen);
+    info_label = lv_label_create(tp_cal_screen);
     lv_obj_align(info_label, LV_ALIGN_CENTER, 0, 0);
     lv_label_set_long_mode(info_label, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(info_label, LV_HOR_RES - 20);
@@ -78,19 +78,19 @@ static void tp_cal_screen_init(void) {
     lv_label_set_text(info_label, START_CAL_MSG);
 
     // Status label
-    status_label = lv_label_create(cal_screen);
+    status_label = lv_label_create(tp_cal_screen);
     lv_obj_align_to(status_label, info_label, LV_ALIGN_OUT_BOTTOM_MID, 0, 0);
     lv_label_set_text(status_label, "");
 
     // Cal cross point img
-    cross_img = lv_img_create(cal_screen);
+    cross_img = lv_img_create(tp_cal_screen);
     lv_img_set_src(cross_img, &cal_cross);
     lv_obj_set_align(cross_img, LV_ALIGN_TOP_LEFT);
     lv_obj_add_flag(cross_img, LV_OBJ_FLAG_HIDDEN);
 
     // Confirm message box
     static const char * confirm_msg_box_btns[] = {STORE_BTN_MSG, RESTART_BTN_MSG, NULL};
-    confirm_msg_box = lv_msgbox_create(cal_screen, CAL_DONE_MSG, STORE_CAL_MSG, confirm_msg_box_btns, false);
+    confirm_msg_box = lv_msgbox_create(tp_cal_screen, CAL_DONE_MSG, STORE_CAL_MSG, confirm_msg_box_btns, false);
     lv_obj_center(confirm_msg_box);
     lv_obj_add_event_cb(confirm_msg_box, confirm_msg_box_cb, LV_EVENT_VALUE_CHANGED, NULL);
     lv_obj_add_flag(confirm_msg_box, LV_OBJ_FLAG_HIDDEN);
@@ -119,13 +119,10 @@ static void set_cross_pos(lv_coord_t x, lv_coord_t y) {
  * @param[in] point The index of the point to show (0 - CALIBRATION_POINTS_COUNT)
  */
 static void show_point(uint8_t point) {
-    char buf[32];
-
     assert(point < CALIBRATION_POINTS_COUNT);
 
     set_cross_pos(points[point].x, points[point].y);
-    snprintf(buf, sizeof(buf), "%d / %d", point+1, CALIBRATION_POINTS_COUNT);
-    lv_label_set_text(status_label, buf);
+    lv_label_set_text_fmt(status_label, "%d / %d", point+1, CALIBRATION_POINTS_COUNT);
 }
 
 /**
@@ -177,7 +174,7 @@ static void touched_cb(lv_event_t * event) {
             lv_obj_add_flag(status_label, LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(info_label, LV_OBJ_FLAG_HIDDEN);
             lv_obj_clear_flag(confirm_msg_box, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_remove_event_cb(cal_screen, touched_cb);
+            lv_obj_remove_event_cb(tp_cal_screen, touched_cb);
 
             // Calibrate the touchscreen using the collected data
             ui_task_calibrate_tp(cal_points, points, CALIBRATION_POINTS_COUNT);
@@ -207,14 +204,14 @@ static void confirm_msg_box_cb(lv_event_t * event) {
             ui_task_store_tp_cal();
 
             // Go back to the main screen
-            lv_obj_del_async(cal_screen);
-            ui_load_screen1();
+            lv_obj_del_async(tp_cal_screen);
+            lv_disp_load_scr(main_screen);
             break;
         case 1: // Restart
             lv_obj_clear_flag(info_label, LV_OBJ_FLAG_HIDDEN);
             lv_label_set_text(info_label, START_CAL_MSG);
             lv_obj_add_flag(confirm_msg_box, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_add_event_cb(cal_screen, touched_cb, LV_EVENT_PRESSED, NULL);
+            lv_obj_add_event_cb(tp_cal_screen, touched_cb, LV_EVENT_PRESSED, NULL);
             break;
         default:
             break;
