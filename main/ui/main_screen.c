@@ -6,22 +6,23 @@
  * It shows the current power consumption, the current time, the predicted peak and the peak demand chart.
  *
  * The following functions can be used to set the data this screen uses:
- *   - set_power_consumption(uint16_t value)
- *   - set_new_max_peak_demand(uint16_t value)
- *   - reset_peak_demand_chart_data(void)
- *   - add_peak_demand_data_point(time_t time, uint16_t value)
- *   - set_predicted_peak(uint16_t value)
- *   - set_wifi_status(bool connected)
- *   - set_connected_status(bool connected)
+ *   - ui_set_power_consumption(uint16_t value)
+ *   - ui_set_new_max_peak_demand(uint16_t value)
+ *   - ui_reset_peak_demand_chart_data(void)
+ *   - ui_add_peak_demand_data_point(time_t time, uint16_t value)
+ *   - ui_set_predicted_peak(uint16_t value)
+ *   - ui_set_wifi_status(bool connected)
+ *   - ui_set_connected_status(bool connected)
  *
  * @todo Load the settings screen when the icon is pressed
- * @toto Add helper functions to set the energy chart data
+ * @todo Add helper functions to set the energy chart data
  * @todo Show the correct time of the day under the energy chart
  */
 
 #include <stdio.h>
 #include <assert.h>
 #include "lvgl.h"
+#include "ui.h"
 #include "main_screen.h"
 
 // UI constants
@@ -35,14 +36,10 @@
 #define ENERGY_CHART_HEIGHT_PX 70
 
 // Colors
-#define COLOR_KWARTIWI_RED lv_color_hex(0xEB440E)
-#define COLOR_KWARTIWI_ORANGE lv_color_hex(0xEC9106)
-#define COLOR_KWARTIWI_GREY lv_color_hex(0x4D4D4D)
-#define COLOR_KWARTIWI_GREEN lv_color_hex(0x6AD011)
-#define COLOR_KWARTIWI_BLUE lv_color_hex(0x623CEA)
 #define TEXT_COLOR lv_color_hex(0xFFFFFF)
 #define BACKGROUND_COLOR lv_color_hex(0x000000)
-#define COLOR_WHITE lv_color_hex(0xFFFFFF)
+
+bool main_screen_initialized = false;
 
 // LVGL objects
 lv_obj_t * main_screen;
@@ -66,7 +63,7 @@ static lv_coord_t peak_demand_chart_y_range = PEAK_DEMAND_CHART_DEFAULT_Y_RANGE;
 static lv_point_t peak_demand_last_point_w = {0, 0};
 static lv_coord_t max_peak_line_pos_w = MAX_PEAK_LINE_DEFAULT_POS;
 static lv_point_t predicted_peak_line_points[2] = {{0, PEAK_DEMAND_CHART_HEIGHT_PX}, {0, PEAK_DEMAND_CHART_HEIGHT_PX}};
-static uint16_t new_max_peak_demand_w = 0;
+static uint16_t new_max_peak_demand_w = MAX_PEAK_LINE_DEFAULT_POS;
 
 // Fonts and images
 LV_FONT_DECLARE(roboto_bold_70);
@@ -206,8 +203,10 @@ void main_screen_init(void)
     timer_1s = lv_timer_create(timer_1s_cb, 1000, NULL);
 
     // Set the initial values
-    new_max_peak_demand_w = get_max_peak_month();
-    set_max_peak_line(new_max_peak_demand_w);
+    new_max_peak_demand_w = ui_get_max_peak_month();
+    ui_set_max_peak_line(new_max_peak_demand_w);
+
+    main_screen_initialized = true;
 }
 
 /**
@@ -218,7 +217,7 @@ void main_screen_init(void)
 static void timer_1s_cb(lv_timer_t * timer)
 {
     // Update the time
-    set_time(get_time());
+    ui_set_time(ui_get_time());
 }
 
 /**
@@ -228,7 +227,7 @@ static void timer_1s_cb(lv_timer_t * timer)
  *
  * @param[in] value The power consumption value in Watt
  */
-void set_power_consumption(uint16_t value) {
+void ui_set_power_consumption(uint16_t value) {
     if (value < 9999) {
         lv_label_set_text_fmt(power_consumption_label, "%d", value);
         lv_label_set_text(power_consumption_unit_label, "W");
@@ -246,7 +245,7 @@ void set_power_consumption(uint16_t value) {
  *
  * @param[in] time The current time
  */
-void set_time(time_t time) {
+void ui_set_time(time_t time) {
     struct tm * _tm = localtime(&time);
     lv_label_set_text_fmt(time_label, "%02d:%02d", _tm->tm_hour, _tm->tm_min);
 }
@@ -261,7 +260,10 @@ void set_time(time_t time) {
  *
  * @param[in] value The new max peak value in Watt
  */
-void set_max_peak_line(uint16_t value) {
+void ui_set_max_peak_line(uint16_t value) {
+    if (value < MAX_PEAK_DEMAND_MIN_VALUE_W) {
+        value = MAX_PEAK_DEMAND_MIN_VALUE_W;
+    }
     // Find the highest point in the chart in Watt, and add an offset in px to it
     lv_coord_t highest_point = (lv_coord_t)(value > peak_demand_last_point_w.y ? value : peak_demand_last_point_w.y);
     highest_point = (lv_coord_t)(highest_point * PEAK_DEMAND_CHART_HEIGHT_PX / (PEAK_DEMAND_CHART_HEIGHT_PX - MAX_PEAK_LINE_MIN_OFFSET_TOP_PX));
@@ -271,6 +273,7 @@ void set_max_peak_line(uint16_t value) {
     lv_chart_set_range(peak_demand_chart, LV_CHART_AXIS_PRIMARY_Y, 0, peak_demand_chart_y_range);
 
     // Update the max peak line (convert the value in Watt to a position in px)
+    assert(peak_demand_chart_y_range != 0);
     lv_coord_t pos = (lv_coord_t)((-1) * value * PEAK_DEMAND_CHART_HEIGHT_PX / peak_demand_chart_y_range);
     lv_obj_set_pos(max_peak_line, 0, pos);
     max_peak_line_pos_w = (lv_coord_t)value;
@@ -287,7 +290,10 @@ void set_max_peak_line(uint16_t value) {
  *
  * @param[in] value The new max peak demand in Watt
  */
-void set_new_max_peak_demand(uint16_t value) {
+void ui_set_new_max_peak_demand(uint16_t value) {
+    if (value < MAX_PEAK_DEMAND_MIN_VALUE_W) {
+        value = MAX_PEAK_DEMAND_MIN_VALUE_W;
+    }
     new_max_peak_demand_w = value;
 }
 
@@ -299,7 +305,7 @@ void set_new_max_peak_demand(uint16_t value) {
  * @param[in] time The time of the data point
  * @param[in] value The value of the data point in Watt
  */
-void add_peak_demand_data_point(time_t time, uint16_t value) {
+void ui_add_peak_demand_data_point(time_t time, uint16_t value) {
     const uint8_t seconds_per_point = 900 / PEAK_DEMAND_CHART_POINT_COUNT;  // 900 seconds = 15 minutes
     struct tm * _tm = localtime(&time);
 
@@ -309,7 +315,7 @@ void add_peak_demand_data_point(time_t time, uint16_t value) {
     // Check if we are at the start of a new quarter-hour
     if (seconds == 0 || value < peak_demand_last_point_w.y) {
         // Reset the chart data, so no old data is shown
-        reset_peak_demand_chart_data();
+        ui_reset_peak_demand_chart_data();
     }
 
     // Set the point in the chart at the calculated position
@@ -333,7 +339,7 @@ void add_peak_demand_data_point(time_t time, uint16_t value) {
  *
  * Resets all the data points, the last point and sets the max peak line to the new max peak demand.
  */
-void reset_peak_demand_chart_data(void) {
+void ui_reset_peak_demand_chart_data(void) {
     // Set all the values, so that they are not visible
     lv_chart_set_all_value(peak_demand_chart, peak_demand_chart_series, LV_CHART_POINT_NONE);
 
@@ -342,7 +348,7 @@ void reset_peak_demand_chart_data(void) {
     peak_demand_last_point_w.x = 0;
 
     // Update the max peak line
-    set_max_peak_line(new_max_peak_demand_w);
+    ui_set_max_peak_line(new_max_peak_demand_w);
 }
 
 /**
@@ -350,7 +356,7 @@ void reset_peak_demand_chart_data(void) {
  *
  * @param[in] value The predicted peak in Watt at the end of the quarter-hour
  */
-void set_predicted_peak(uint16_t value) {
+void ui_set_predicted_peak(uint16_t value) {
     // Convert the last point (peak_demand_last_point_w) to pixels
     lv_chart_get_point_pos_by_id(peak_demand_chart, peak_demand_chart_series, peak_demand_last_point_w.x, &predicted_peak_line_points[0]);
     predicted_peak_line_points[0].x -= PEAK_DEMAND_CHART_PADDING_PX;
@@ -368,7 +374,7 @@ void set_predicted_peak(uint16_t value) {
  *
  * @param[in] connected True if connected, false if not connected
  */
-void set_wifi_status(bool connected) {
+void ui_set_wifi_status(bool connected) {
     if (connected) {
         lv_img_set_src(wifi_symbol_img, &wifi_symbol_20_14);
     }
@@ -382,7 +388,7 @@ void set_wifi_status(bool connected) {
  *
  * @param[in] connected True if connected, false if not connected
  */
-void set_connected_status(bool connected) {
+void ui_set_connected_status(bool connected) {
     if (connected) {
         lv_img_set_src(connected_symbol_img, &connected_symbol_14_14);
     }
@@ -407,7 +413,7 @@ static void set_peak_demand_chart_data_point(uint16_t value, uint8_t index) {
     peak_demand_last_point_w.x = index;
 
     if (value > max_peak_line_pos_w) {
-        set_max_peak_line(max_peak_line_pos_w);
+        ui_set_max_peak_line(max_peak_line_pos_w);
     }
 }
 
@@ -418,6 +424,10 @@ static void set_peak_demand_chart_data_point(uint16_t value, uint8_t index) {
 static void open_settings_event_cb(lv_event_t * e) {
     printf("Loading settings\n");
     // TODO: implement loading settings screen
+
+    // load the touch calibration screen
+    tp_call_load_screen();
+
 }
 
 /**
