@@ -13,7 +13,7 @@
 #include "web_client.h"
 #include "data_manager.h"
 
-esp_event_loop_handle_t loop_handle;
+esp_event_loop_handle_t app_loop_handle;
 
 static void * CJSON_CDECL cjson_malloc(size_t size)
 {
@@ -37,18 +37,18 @@ void app_main(void) {
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
     esp_event_loop_args_t loop_args = {
-        .queue_size = 5,
-        .task_name = "event_loop_task",
-        .task_priority = 5,
-        .task_stack_size = 4096,
-        .task_core_id = 0
+            .queue_size = 5,
+            .task_name = "event_loop_task",
+            .task_priority = 5,
+            .task_stack_size = 4096,
+            .task_core_id = 0
     };
-    ESP_ERROR_CHECK(esp_event_loop_create(&loop_args, &loop_handle));
+    ESP_ERROR_CHECK(esp_event_loop_create(&loop_args, &app_loop_handle));
 
     // Initialize the CJson library to use the psram
     static cJSON_Hooks hooks = {
-        .malloc_fn = cjson_malloc,
-        .free_fn = heap_caps_free,
+            .malloc_fn = cjson_malloc,
+            .free_fn = heap_caps_free,
     };
     cJSON_InitHooks(&hooks);
 
@@ -66,14 +66,13 @@ void app_main(void) {
 
     // Initialize the UI
     esp_log_level_set("ui_task", ESP_LOG_DEBUG);
-    xTaskCreatePinnedToCore(&ui_task, "ui_task", 8192, NULL, 5, NULL, 1);
+    esp_log_level_set("ui", ESP_LOG_DEBUG);
+    xTaskCreatePinnedToCore(&ui_task, "ui_task", 8192, NULL, 6, NULL, 1);
 
     // Initialize networking
     esp_log_level_set("networking", ESP_LOG_DEBUG);
     setup_networking();
 
-    // Run the web client
     esp_log_level_set("web_client", ESP_LOG_DEBUG);
-    xTaskCreatePinnedToCore(&web_client_task, "web_client_task", 4096, NULL, 5, NULL,1);
 
 }
