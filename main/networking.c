@@ -89,8 +89,8 @@ void setup_networking(void) {
     // Initialize in station mode
     wifi_init_sta(wifi_config);
 
-
     // Set the hostname
+    ESP_LOGD(TAG, "Setting hostname to %s", networking_config.hostname);
     ESP_ERROR_CHECK(esp_netif_set_hostname(network_interface, networking_config.hostname));
 
     // Initialize mDNS
@@ -373,7 +373,9 @@ static void wifi_init_sta(wifi_config_t *config) {
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_start());
 
-    EventBits_t event_bits = xEventGroupWaitBits(s_wifi_event_group, WIFI_STA_STARTED_BIT, pdFALSE, pdFALSE, portMAX_DELAY);
+    ESP_LOGD(TAG, "Starting Wi-Fi");
+
+    EventBits_t event_bits = xEventGroupWaitBits(s_wifi_event_group, WIFI_STA_STARTED_BIT, pdFALSE, pdFALSE, pdMS_TO_TICKS(1000));
     if (!(event_bits & WIFI_STA_STARTED_BIT)) {
         ESP_LOGE(TAG, "Failed to start Wi-Fi in STA mode");
         abort();
@@ -386,13 +388,13 @@ static void wifi_init_sta(wifi_config_t *config) {
 static void wifi_deinit_sta(void) {
     ESP_LOGI(TAG, "Deinitializing Wi-Fi in STA mode");
 
-    // Stop Wi-Fi
-    ESP_ERROR_CHECK(esp_wifi_stop());
-    ESP_ERROR_CHECK(esp_wifi_deinit());
-
     // Unregister event handlers
     ESP_ERROR_CHECK(esp_event_handler_instance_unregister(IP_EVENT, IP_EVENT_STA_GOT_IP, instance_ip_got_ip));
     ESP_ERROR_CHECK(esp_event_handler_instance_unregister(WIFI_EVENT, ESP_EVENT_ANY_ID, instance_wifi_any_id));
+
+    // Stop Wi-Fi
+    ESP_ERROR_CHECK(esp_wifi_stop());
+    ESP_ERROR_CHECK(esp_wifi_deinit());
 
     // Destroy the network interface
     esp_netif_destroy(network_interface);
