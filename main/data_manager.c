@@ -19,7 +19,7 @@
 
 ESP_EVENT_DEFINE_BASE(DATA_MANAGER_EVENTS);
 
-extern esp_event_loop_handle_t loop_handle;
+extern esp_event_loop_handle_t app_loop_handle;
 
 static const char *TAG = "data_manager";
 data_manager_data_t data_manager_data;
@@ -69,11 +69,11 @@ data_manager_history_data_t * data_manager_get_history_data(void) {
 }
 
 void data_manager_notify_new_meter_data_available(void) {
-    ESP_ERROR_CHECK(esp_event_post_to(loop_handle, DATA_MANAGER_EVENTS, DATA_MANAGER_NEW_METER_DATA_AVAILABLE, NULL, 0, portMAX_DELAY));
+    ESP_ERROR_CHECK(esp_event_post_to(app_loop_handle, DATA_MANAGER_EVENTS, DATA_MANAGER_NEW_METER_DATA_AVAILABLE, NULL, 0, portMAX_DELAY));
 }
 
 void data_manager_notify_new_meter_history_data_available(void) {
-    ESP_ERROR_CHECK(esp_event_post_to(loop_handle, DATA_MANAGER_EVENTS, DATA_MANAGER_NEW_METER_HISTORY_DATA_AVAILABLE, NULL, 0, portMAX_DELAY));
+    ESP_ERROR_CHECK(esp_event_post_to(app_loop_handle, DATA_MANAGER_EVENTS, DATA_MANAGER_NEW_METER_HISTORY_DATA_AVAILABLE, NULL, 0, portMAX_DELAY));
 }
 
 /**
