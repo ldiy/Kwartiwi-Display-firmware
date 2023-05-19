@@ -28,8 +28,7 @@
 #define LVGL_BUFFER_SIZE (UI_TASK_DISPLAY_WIDTH * UI_TASK_DISPLAY_HEIGHT * sizeof(lv_color_t) / 5) // 1/5 of the display area (at least 1/10 is recommended)
 #define MAX_TRANSFER_SIZE LVGL_BUFFER_SIZE
 
-extern esp_event_loop_handle_t loop_handle;
-
+extern esp_event_loop_handle_t app_loop_handle;
 
 static const char *TAG = "ui_task";
 static esp_lcd_i80_bus_handle_t i80_bus;
@@ -41,7 +40,8 @@ static lv_indev_drv_t buttons_indev_drv;
 static lv_indev_drv_t touch_indev_drv;
 static esp_timer_handle_t lvgl_periodic_timer;
 static bool use_raw_touch_input = false;
-SemaphoreHandle_t lvgl_mutex;
+static bool ui_initialized = false;     // Protected by lvgl_mutex
+SemaphoreHandle_t lvgl_mutex;           // Mutex for all lvgl and ui related operations
 
 // Function prototypes
 static void init_display(void);
@@ -59,17 +59,18 @@ static void lvgl_touch_feedback_cb(lv_indev_drv_t *drv, uint8_t event);
 static void lvgl_tick_task(void *arg);
 static void update_ui_on_event(void* handler_arg, esp_event_base_t base, int32_t id, void* event_data);
 
+
 /**
  * @brief Run the UI task
  *
  * This task initializes the display, input buttons, and LVGL, and then runs the UI.
  *
- * @note This task must be pinned to a core.
- * @note lvgl functions should only be called from this task.
+ * @note This task must be pinned to a core (LVGL requires it).
  *
  * @param pvParameters unused
  */
 _Noreturn void ui_task(void *pvParameters) {
+    ESP_LOGI(TAG, "Starting UI task");
     lvgl_mutex = xSemaphoreCreateMutex();
 
     if (lvgl_mutex == NULL) {
@@ -84,6 +85,11 @@ _Noreturn void ui_task(void *pvParameters) {
     // Initialize the buttons
     init_buttons();
 
+    // Register event handlers, which will update the UI
+    esp_event_handler_register_with(app_loop_handle, DATA_MANAGER_EVENTS, ESP_EVENT_ANY_ID, update_ui_on_event, NULL);
+    esp_event_handler_register_with(app_loop_handle, WEB_CLIENT_EVENTS, ESP_EVENT_ANY_ID, update_ui_on_event, NULL);
+    esp_event_handler_register_with(app_loop_handle, NETWORKING_EVENTS, ESP_EVENT_ANY_ID, update_ui_on_event, NULL);
+
     xSemaphoreTake(lvgl_mutex, portMAX_DELAY);
 
     // Initialize LVGL
@@ -91,21 +97,20 @@ _Noreturn void ui_task(void *pvParameters) {
 
     // Initialize the UI
     ui_init();
+    ui_initialized = true;
 
     xSemaphoreGive(lvgl_mutex);
-
-    esp_event_handler_register_with(loop_handle, DATA_MANAGER_EVENTS, ESP_EVENT_ANY_ID, update_ui_on_event, NULL);
-    esp_event_handler_register_with(loop_handle, WEB_CLIENT_EVENTS, ESP_EVENT_ANY_ID, update_ui_on_event, NULL);
 
     // Set the backlight on
     display_set_backlight(true);
 
-    for(;;) {
-        vTaskDelay(pdMS_TO_TICKS(10));
 
+    for(;;) {
         xSemaphoreTake(lvgl_mutex, portMAX_DELAY);
         lv_task_handler();
         xSemaphoreGive(lvgl_mutex);
+
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
 
     // Free resources
@@ -508,7 +513,7 @@ void ui_task_use_raw_tp_data(bool raw) {
  * This function is called by the event loop when an event is dispatched.
  * It updates the UI accordingly.
  *
- * @note The data manager, ui and main screen must be initialized before calling this function.
+ * @note The data manager must be initialized before calling this function.
  *
  * @param[in] handler_arg
  * @param[in] base
@@ -517,11 +522,21 @@ void ui_task_use_raw_tp_data(bool raw) {
  */
 static void update_ui_on_event(void* handler_arg, esp_event_base_t base, int32_t id, void* event_data)
 {
+    uint16_t ap_count;
+    static wifi_ap_record_t * ap_records;
+    static ui_wifi_network_t * wifi_networks;
     static bool first_run = true;
-    ESP_LOGD(TAG, "Event dispatched from event loop base=%s, event_id=%ld", base, id);
+
+    ESP_LOGD(TAG, "Event dispatched from event loop: %s, %ld", base, id);
 
     if (xSemaphoreTake(lvgl_mutex, pdMS_TO_TICKS(500)) != pdTRUE) {
         ESP_LOGE(TAG, "Could not take lvgl mutex within 500ms");
+        return;
+    }
+
+    if (!ui_initialized) {
+        ESP_LOGE(TAG, "UI not initialized");
+        xSemaphoreGive(lvgl_mutex);
         return;
     }
 
@@ -539,22 +554,22 @@ static void update_ui_on_event(void* handler_arg, esp_event_base_t base, int32_t
         switch ((data_manager_event_id_t)id) {
             case DATA_MANAGER_NEW_METER_DATA_AVAILABLE:
                 ESP_LOGD(TAG, "New meter data available, updating UI");
-                set_power_consumption((uint16_t)(meter_data->current_power_usage * 1000));
-                set_predicted_peak((uint16_t)(meter_data->predicted_peak.demand * 1000));
-                add_peak_demand_data_point(meter_data->p1_timestamp, (uint16_t)(meter_data->current_avg_demand * 1000));
-                set_new_max_peak_demand((uint16_t)(meter_data->max_demand_active_month.demand * 1000));
+                ui_set_power_consumption((uint16_t) (meter_data->current_power_usage * 1000));
+                ui_set_predicted_peak((uint16_t) (meter_data->predicted_peak.demand * 1000));
+                ui_add_peak_demand_data_point(meter_data->p1_timestamp, (uint16_t) (meter_data->current_avg_demand * 1000));
+                ui_set_new_max_peak_demand((uint16_t) (meter_data->max_demand_active_month.demand * 1000));
                 if (first_run) {
                     first_run = false;
                     ui_set_initialized(true);
-                    set_max_peak_line((uint16_t)(meter_data->max_demand_active_month.demand * 1000));
+                    ui_set_max_peak_line((uint16_t) (meter_data->max_demand_active_month.demand * 1000));
                 }
                 break;
             case DATA_MANAGER_NEW_METER_HISTORY_DATA_AVAILABLE:
                 ESP_LOGD(TAG, "New meter history data available, updating UI");
-                reset_peak_demand_chart_data();
+                ui_reset_peak_demand_chart_data();
                 ESP_LOGD(TAG, "Max demand short term items: %d", history_data->max_demand_short_term_items);
                 for (uint16_t i = 0; i < history_data->max_demand_short_term_items; i++) {
-                    add_peak_demand_data_point(history_data->max_demand_short_term[i].timestamp, (uint16_t)(history_data->max_demand_short_term[i].demand * 1000));
+                    ui_add_peak_demand_data_point(history_data->max_demand_short_term[i].timestamp, (uint16_t) (history_data->max_demand_short_term[i].demand * 1000));
                 }
                 break;
         }
@@ -562,14 +577,76 @@ static void update_ui_on_event(void* handler_arg, esp_event_base_t base, int32_t
 
     }
     else if (base == WEB_CLIENT_EVENTS) {
+        SemaphoreHandle_t web_client_found_servers_mutex_handle;
         switch ((web_client_event_id_t)id) {
             case WEB_CLIENT_INITIALIZED:
                 break;
             case WEB_CLIENT_EVENT_CONNECTED:
-                set_connected_status(true);
+                ui_set_connected_status(true);
                 break;
             case WEB_CLIENT_EVENT_DISCONNECTED:
-                set_connected_status(false);
+                ui_set_connected_status(false);
+                break;
+            case WEB_CLIENT_SERVERS_FOUND:
+                web_client_found_servers_mutex_handle = web_client_get_found_servers_mutex();
+                xSemaphoreTake(web_client_found_servers_mutex_handle, portMAX_DELAY);
+                web_client_server_t *servers;
+                uint8_t server_count = web_client_get_found_servers(&servers);
+                ui_server_t *ui_servers = malloc(sizeof(ui_server_t) * server_count);
+                for (uint8_t i = 0; i < server_count; i++) {
+                    ui_servers[i].ipv4 = servers[i].ip.u_addr.ip4.addr;
+                    strncpy(ui_servers[i].hostname, servers[i].hostname, sizeof(ui_servers[i].hostname));
+                }
+                xSemaphoreGive(web_client_found_servers_mutex_handle);
+                ui_set_servers_found(ui_servers, server_count);
+                free(ui_servers);
+                break;
+        }
+    }
+    else if (base == NETWORKING_EVENTS) {
+        switch ((networking_event_id_t)id) {
+            case NETWORKING_INITIALIZED:
+                ESP_LOGD(TAG, "Setting network initialized to true");
+                ui_set_network_initialized(true);
+                break;
+            case NETWORKING_EVENT_WIFI_CONNECTED:
+                ESP_LOGD(TAG, "Setting wifi connected to true");
+                ui_set_wifi_connected(true);
+                break;
+            case NETWORKING_EVENT_WIFI_DISCONNECTED:
+                ESP_LOGD(TAG, "Setting wifi connected to false");
+                ui_set_wifi_connected(false);
+                break;
+            case NETWORKING_EVENT_WIFI_SCAN_DONE:
+                ap_count = 0;
+                // TODO: abstract this into a function in the networking layer
+                ESP_ERROR_CHECK(esp_wifi_scan_get_ap_num(&ap_count));
+
+                ap_records = malloc(sizeof(wifi_ap_record_t) * ap_count);
+                wifi_networks = malloc(sizeof(ui_wifi_network_t) * ap_count);
+
+                ESP_ERROR_CHECK(esp_wifi_scan_get_ap_records(&ap_count, ap_records));
+
+                ESP_LOGI(TAG, "Found %d access points", ap_count);
+
+                // Find unique SSIDs and store them in the wifi_networks array
+                uint16_t unique_ssid_count = 0;
+                for (uint16_t i = 0; i < ap_count; i++) {
+                    bool found = false;
+                    for (uint16_t j = 0; j < unique_ssid_count; j++) {
+                        if (strcmp((char *)ap_records[i].ssid, (char *)wifi_networks[j].ssid) == 0) {
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found) {
+                        strcpy((char *)wifi_networks[unique_ssid_count].ssid, (char *)ap_records[i].ssid);
+                        unique_ssid_count++;
+                    }
+                }
+                ui_set_wifi_scan_result(wifi_networks, unique_ssid_count);
+                free(ap_records);
+                free(wifi_networks);
                 break;
         }
     }

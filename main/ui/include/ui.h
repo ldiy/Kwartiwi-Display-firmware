@@ -28,7 +28,6 @@ typedef struct {
 
 
 #include "main_screen.h"
-#include "tp_cal_screen.h"
 #include "loading_screen.h"
 #include "setup_screen.h"
 
@@ -42,15 +41,32 @@ typedef struct {
 #define SIMULATOR 0
 
 #if SIMULATOR
+
+#include <stdio.h>
+
+#define UI_LOGV(TAG, format, ...) printf("[V] " TAG ": " format "\n", ##__VA_ARGS__)
+#define UI_LOGI(TAG, format, ...) printf("[I] " TAG ": " format "\n", ##__VA_ARGS__)
+#define UI_LOGD(TAG, format, ...) printf("[D] " TAG ": " format "\n", ##__VA_ARGS__)
+#define UI_LOGW(TAG, format, ...) printf("[W] " TAG ": " format "\n", ##__VA_ARGS__)
+#define UI_LOGE(TAG, format, ...) printf("[E] " TAG ": " format "\n", ##__VA_ARGS__)
+
 #else
 #include "nvs.h"
 #include "esp_log.h"
 #include "data_manager.h"
 #include "networking.h"
 #include "web_client.h"
+#include "tp_cal_screen.h"
 
 #define NVS_GENERAL_NAMESPACE "general"
 #define NVS_SETUP_KEY "setup_done"
+
+#define UI_LOGV(TAG, format, ...) ESP_LOGV(TAG, format, ##__VA_ARGS__)
+#define UI_LOGI(TAG, format, ...) ESP_LOGI(TAG, format, ##__VA_ARGS__)
+#define UI_LOGD(TAG, format, ...) ESP_LOGD(TAG, format, ##__VA_ARGS__)
+#define UI_LOGW(TAG, format, ...) ESP_LOGW(TAG, format, ##__VA_ARGS__)
+#define UI_LOGE(TAG, format, ...) ESP_LOGE(TAG, format, ##__VA_ARGS__)
+
 #endif
 
 
@@ -61,7 +77,11 @@ void ui_set_wifi_connected(bool value);
 void ui_set_wifi_scan_result(ui_wifi_network_t * networks, uint16_t len);
 void ui_set_servers_found(ui_server_t * servers, uint16_t len);
 
-
+/**
+ * @brief Check if the device is setup
+ *
+ * @return true if the device is setup, false otherwise
+ */
 static inline bool ui_is_setup(void) {
 #if SIMULATOR
     return false;
@@ -76,6 +96,11 @@ static inline bool ui_is_setup(void) {
 #endif
 }
 
+/**
+ * @brief Mark the device as setup, so the next time it boots it will go to the main screen
+ *
+ * @param done
+ */
 static inline void ui_set_setup_done(bool done) {
 #if SIMULATOR
 #else
@@ -155,6 +180,94 @@ static inline uint16_t ui_get_predicted_peak(void) {
 #endif
 }
 
+/**
+ * @brief Connect to the configured wifi network
+ *
+ */
+static inline void ui_connect_wifi(void) {
+#if SIMULATOR
 
+#else
+    networking_wifi_connect();
+#endif
+}
+
+/**
+ * @brief Start the web client
+ */
+static inline void ui_start_web_client(void) {
+#if SIMULATOR
+
+#else
+    // Run the web client
+    esp_log_level_set("web_client", ESP_LOG_DEBUG);
+    xTaskCreatePinnedToCore(&web_client_task, "web_client_task", 4096, NULL, 5, NULL,1);
+#endif
+}
+
+/**
+ * @brief Start a scan for available wifi networks
+ */
+static inline void ui_scan_wifi_networks(void) {
+#if SIMULATOR
+
+#else
+    networking_wifi_scan();
+#endif
+}
+
+/**
+ * @brief Set the wifi configuration
+ *
+ * @param[in] ssid The SSID of the wifi network
+ * @param[in] password The password of the wifi network
+ */
+static inline void ui_set_wifi_config(const char *const ssid, const char *const password) {
+#if SIMULATOR
+
+#else
+    networking_set_wifi_config(ssid, password);
+#endif
+}
+
+/**
+ * @brief Start a scan for available servers
+ */
+static inline void ui_find_servers(void) {
+#if SIMULATOR
+
+#else
+    web_client_find_servers();
+#endif
+}
+
+/**
+ * @brief Save the given configuration
+ *
+ * @param[in] wifi_ssid The SSID of the wifi network
+ * @param[in] wifi_passphrase The password of the wifi network
+ * @param[in] server_hostname The hostname of the server
+ */
+static inline void ui_save_config(const char *const wifi_ssid, const char *const wifi_passphrase, const char *const server_hostname) {
+#if SIMULATOR
+
+#else
+    ESP_ERROR_CHECK(networking_save_wifi_config(wifi_ssid, wifi_passphrase));
+    ESP_ERROR_CHECK(web_client_save_server_config(server_hostname));
+#endif
+}
+
+/**
+ * @brief Reboot the device
+ */
+static inline void ui_reboot(void) {
+#if SIMULATOR
+
+#else
+    // TODO: BUG: This causes a WIFI disconnect, which causes the event-handler to try to reconnect,
+    //  but it can't because the network adapter is already deinitialized, so an assert is triggered
+    esp_restart();
+#endif
+}
 
 #endif //UI_H
