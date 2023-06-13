@@ -14,7 +14,7 @@
  *   - ui_set_wifi_status(bool connected)
  *   - ui_set_connected_status(bool connected)
  *
- * @todo Load the settings screen when the icon is pressed
+ * @todo Load the settings screen when the icon is pressed instead of the touch cal screen
  * @todo Add helper functions to set the energy chart data
  * @todo Show the correct time of the day under the energy chart
  */
@@ -59,6 +59,7 @@ static lv_obj_t * predicted_peak_line;
 
 // Static variables
 static lv_timer_t * timer_1s;
+static lv_timer_t * alarm_timer;
 static lv_coord_t peak_demand_chart_y_range = PEAK_DEMAND_CHART_DEFAULT_Y_RANGE;
 static lv_point_t peak_demand_last_point_w = {0, 0};
 static lv_coord_t max_peak_line_pos_w = MAX_PEAK_LINE_DEFAULT_POS;
@@ -76,10 +77,13 @@ LV_IMG_DECLARE(settings_symbol_20_20);
 
 // Function prototypes
 static void set_peak_demand_chart_data_point(uint16_t value, uint8_t index);
+static void show_alarm_style(bool alarm);
+static void set_alarm_status(bool alarm);
 static void peak_demand_chart_draw_event_cb(lv_event_t * e);
 static void energy_chart_draw_event_cb(lv_event_t * e);
 static void open_settings_event_cb(lv_event_t * e);
 static void timer_1s_cb(lv_timer_t * timer);
+static void alarm_timer_cb(lv_timer_t * timer);
 
 /**
  * @brief Initialize the main screen
@@ -201,23 +205,14 @@ void main_screen_init(void)
 
     // Timers
     timer_1s = lv_timer_create(timer_1s_cb, 1000, NULL);
+    alarm_timer = lv_timer_create(alarm_timer_cb, 500, NULL);
 
     // Set the initial values
     new_max_peak_demand_w = ui_get_max_peak_month();
     ui_set_max_peak_line(new_max_peak_demand_w);
+    set_alarm_status(false);
 
     main_screen_initialized = true;
-}
-
-/**
- * @brief Callback function for the 1s timer
- *
- * @param[in] timer
- */
-static void timer_1s_cb(lv_timer_t * timer)
-{
-    // Update the time
-    ui_set_time(ui_get_time());
 }
 
 /**
@@ -367,6 +362,16 @@ void ui_set_predicted_peak(uint16_t value) {
 
     // Redraw the line
     lv_line_set_points(predicted_peak_line, predicted_peak_line_points, 2);
+
+    // Check if the predicted peak is higher than the current max peak and if we are not at the very start of the chart
+    if (value > max_peak_line_pos_w && peak_demand_last_point_w.x >= 50) {
+        // Start the alarm
+        set_alarm_status(true);
+    }
+    else {
+        // Stop the alarm
+        set_alarm_status(false);
+    }
 }
 
 /**
@@ -398,6 +403,42 @@ void ui_set_connected_status(bool connected) {
 }
 
 /**
+ * @brief Callback function for the 1s timer
+ *
+ * @param[in] timer
+ */
+static void timer_1s_cb(lv_timer_t * timer)
+{
+    // Update the time
+    ui_set_time(ui_get_time());
+}
+
+/**
+ * @brief Callback for the alarm timer
+ *
+ * This timer is used to blink the alarm style and beep every 30 seconds.
+ *
+ * @param timer
+ */
+static void alarm_timer_cb(lv_timer_t * timer)
+{
+    static bool blink = false;
+    static uint8_t counter = 0;
+
+    if (counter == 0) {
+        ui_beep_long();
+    }
+
+    counter++;
+    if (counter >= 60){
+        counter = 0;
+    }
+
+    show_alarm_style(blink);
+    blink = !blink;
+}
+
+/**
  * @brief Set a data point in the peak demand chart
  *
  * Set a data point in the peak demand chart at the given index to the given value.
@@ -414,6 +455,42 @@ static void set_peak_demand_chart_data_point(uint16_t value, uint8_t index) {
 
     if (value > max_peak_line_pos_w) {
         ui_set_max_peak_line(max_peak_line_pos_w);
+    }
+}
+
+/**
+ * @brief Show or hide the alarm style
+ *
+ * This function changes the color of the power consumption label to red to indicate an alarm.
+ *
+ * @param alarm True to show the alarm style, false to hide it
+ */
+static void show_alarm_style(bool alarm) {
+    if (alarm) {
+        // Make the power consumption label red
+        lv_obj_set_style_text_color(power_consumption_label, COLOR_KWARTIWI_RED, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_text_color(power_consumption_unit_label, COLOR_KWARTIWI_RED, LV_PART_MAIN | LV_STATE_DEFAULT);
+    }
+    else {
+        // Reset the power consumption label color to the default
+        lv_obj_set_style_text_color(power_consumption_label, TEXT_COLOR, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_text_color(power_consumption_unit_label, TEXT_COLOR, LV_PART_MAIN | LV_STATE_DEFAULT);
+    }
+}
+
+/**
+ * @brief Set the status of the alarm
+ *
+ * @param alarm True to start the alarm, false to stop it
+ */
+static void set_alarm_status(bool alarm) {
+    if (alarm) {
+        // Start the alarm timer
+        lv_timer_resume(alarm_timer);
+    }
+    else {
+        // Stop the alarm timer
+        lv_timer_pause(alarm_timer);
     }
 }
 
