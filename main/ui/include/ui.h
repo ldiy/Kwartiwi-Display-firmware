@@ -57,6 +57,8 @@ typedef struct {
 #include "networking.h"
 #include "web_client.h"
 #include "tp_cal_screen.h"
+#include "buzzer.h"
+#include "tsc2046.h"
 
 #define NVS_GENERAL_NAMESPACE "general"
 #define NVS_SETUP_KEY "setup_done"
@@ -267,6 +269,30 @@ static inline void ui_reboot(void) {
     // TODO: BUG: This causes a WIFI disconnect, which causes the event-handler to try to reconnect,
     //  but it can't because the network adapter is already deinitialized, so an assert is triggered
     esp_restart();
+#endif
+}
+
+static inline void ui_beep_short(void) {
+#if SIMULATOR
+
+#else
+    buzzer_beep(BUZZER_BEEP_TYPE_SHORT);
+#endif
+}
+
+static inline void ui_beep_long(void) {
+#if SIMULATOR
+
+#else
+    buzzer_beep(BUZZER_BEEP_TYPE_LONG);
+#endif
+}
+
+static inline bool ui_is_touchscreen_calibrated(void) {
+#if SIMULATOR
+    return true;
+#else
+    return tsc2046_is_calibrated();
 #endif
 }
 

@@ -35,6 +35,7 @@ static SemaphoreHandle_t tsc2046_cal_data_mutex;
  */
 static double cal_data[6];
 static size_t cal_data_size = sizeof(cal_data);
+static bool calibrated = false;
 
 // Function prototypes
 static esp_err_t read_cal_data_nvs(void);
@@ -275,6 +276,7 @@ esp_err_t tsc2046_calibrate(const tsc2046_cal_data_point_t points[], const size_
                            + b[2] * (a[1] * d[0] - a[0] * d[1])
                           ) / k);
     ESP_LOGD(TAG, "Calibration data: %f %f %f %f %f %f", cal_data[0], cal_data[1], cal_data[2], cal_data[3], cal_data[4], cal_data[5]);
+    calibrated = true;
     xSemaphoreGive(tsc2046_cal_data_mutex);
 
     return ESP_OK;
@@ -328,6 +330,21 @@ esp_err_t tsc2046_store_cal_data(void) {
 }
 
 /**
+ * @brief Check if the calibration data is loaded
+ *
+ * @return true if the calibration data is loaded, false otherwise
+ */
+bool tsc2046_is_calibrated(void) {
+    bool ret;
+
+    xSemaphoreTake(tsc2046_cal_data_mutex, portMAX_DELAY);
+    ret = calibrated;
+    xSemaphoreGive(tsc2046_cal_data_mutex);
+
+    return ret;
+}
+
+/**
  * @brief Read the calibration data from NVS
  *
  * Read the calibration data from NVS.
@@ -349,6 +366,8 @@ static esp_err_t read_cal_data_nvs(void) {
     // Get the cal data semaphore
     xSemaphoreTake(tsc2046_cal_data_mutex, portMAX_DELAY);
 
+    calibrated = false;
+
     // Read the cal data from NVS
     err = nvs_get_blob(nvs_handle, TSC2046_NVS_KEY_CAL_DATA, cal_data, &cal_data_size);
 
@@ -364,6 +383,7 @@ static esp_err_t read_cal_data_nvs(void) {
     }
     else {
         ESP_LOGI(TAG, "Calibration data found: %f, %f, %f, %f, %f, %f", cal_data[0], cal_data[1], cal_data[2], cal_data[3], cal_data[4], cal_data[5]);
+        calibrated = true;
     }
 
     // Free resources

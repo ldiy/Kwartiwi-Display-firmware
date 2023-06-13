@@ -42,6 +42,7 @@ esp_err_t tsc2046_init(void);
 tsc2046_data_t tsc2046_read(bool raw);
 esp_err_t tsc2046_calibrate(const tsc2046_cal_data_point_t points[], size_t num_points);
 esp_err_t tsc2046_store_cal_data(void);
+bool tsc2046_is_calibrated(void);
 
 
 #endif //TSC2046_H

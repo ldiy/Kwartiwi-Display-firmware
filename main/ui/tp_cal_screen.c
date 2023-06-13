@@ -203,9 +203,8 @@ static void confirm_msg_box_cb(lv_event_t * event) {
             // Save the calibration data, so that it can be used on the next boot
             ui_task_store_tp_cal();
 
-            // Go back to the main screen
-            lv_obj_del_async(tp_cal_screen);
-            lv_disp_load_scr(main_screen);
+            // Reboot
+            ui_reboot();
             break;
         case 1: // Restart
             lv_obj_clear_flag(info_label, LV_OBJ_FLAG_HIDDEN);

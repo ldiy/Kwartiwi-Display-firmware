@@ -40,15 +40,22 @@ void ui_init(void) {
     setup_completed = ui_is_setup();
     network_initialized = networking_is_initialized();
 
+
+    if (ui_is_touchscreen_calibrated() == false) {
+        UI_LOGD(TAG, "Touchscreen not calibrated, initializing calibration screen");
+        tp_call_load_screen();
+        return;
+    }
+
     if (!setup_completed) {
         UI_LOGD(TAG, "Setup not completed, initializing setup screen");
         setup_screen_init();
     }
 
     main_screen_init();
-
     // Periodically check if the initialization is complete, and show the next screen if it is
     loading_screen_timer = lv_timer_create(check_loaded, CHECK_INIT_PERIOD_MS, NULL);
+
 }
 
 /**
